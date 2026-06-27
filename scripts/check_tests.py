@@ -53,7 +53,7 @@ def main() -> int:
             errors.append(f"  - {src}: no corresponding test file staged in {test_dir}")
 
     if errors:
-        print("❌ Commit rejected: The following changed source files lack unit tests:")
+        print("Commit rejected: The following changed source files lack unit tests:")
         for e in errors:
             print(e)
         print(
@@ -61,7 +61,7 @@ def main() -> int:
         )
         return 1
 
-    print("✅ All changed source files have corresponding test files staged.")
+    print("All changed source files have corresponding test files staged.")
     return 0
 
 
