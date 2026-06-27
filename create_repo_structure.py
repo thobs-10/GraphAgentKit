@@ -1,8 +1,15 @@
 import os
 from pathlib import Path
 import logging
+import fnmatch
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s]: %(message)s")
+
+# Overwrite existing files only for patterns that are meant to be regenerated.
+OVERWRITE_PATTERNS = [
+    ".github/workflows/ci-cd.yml",
+    "services/*/pyproject.toml",
+]
 
 files_to_create = {
     # ====== CI/CD (full workflow) ======
@@ -503,14 +510,22 @@ addopts = [
 # --- Create all directories and files ---
 for filepath, content in files_to_create.items():
     path = Path(filepath)
+    existed_before = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.exists():
+    should_overwrite = any(
+        fnmatch.fnmatch(filepath, pattern) for pattern in OVERWRITE_PATTERNS
+    )
+
+    if existed_before and not should_overwrite:
         logging.info(f"Already exists, skipping: {filepath}")
         continue
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content if content is not None else "")
-    logging.info(f"Created: {filepath}")
+    if existed_before and should_overwrite:
+        logging.info(f"Updated: {filepath}")
+    else:
+        logging.info(f"Created: {filepath}")
 
 logging.info("✅ Repository skeleton created successfully!")
