@@ -1,0 +1,11 @@
+[project]
+name = "agentic-litellm-gateway"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm[proxy]",
+    "langchain",
+    "langchain-community",
+    "beautifulsoup4",
+    "langfuse",
+]

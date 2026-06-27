@@ -1,0 +1,45 @@
+repos:
+  # ---- Basic file checks & best practices ----
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: detect-private-key
+      - id: check-ast
+
+  # ---- Linting & formatting ----
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # ---- Security ----
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        args: ["-c", "pyproject.toml"]
+        additional_dependencies: [".[toml]"]
+
+  # ---- Code complexity ----
+  - repo: https://github.com/PyCQA/mccabe
+    rev: 0.7.0
+    hooks:
+      - id: mccabe
+        args: ["--max-complexity", "10"]
+
+  # ---- Custom: ensure tests accompany source changes ----
+  - repo: local
+    hooks:
+      - id: check-tests
+        name: Check unit tests for changed code
+        entry: python scripts/check_tests.py
+        language: python
+        files: 'services/.*\\.py$'
+        stages: [commit]

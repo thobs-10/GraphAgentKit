@@ -1,0 +1,13 @@
+[project]
+name = "agentic-orchestrator"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph",
+    "langchain",
+    "langchain-community",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "langfuse",
+]
