@@ -1,15 +1,8 @@
 import os
 from pathlib import Path
 import logging
-import fnmatch
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s]: %(message)s")
-
-# Overwrite existing files only for patterns that are meant to be regenerated.
-OVERWRITE_PATTERNS = [
-    ".github/workflows/ci-cd.yml",
-    "services/*/pyproject.toml",
-]
 
 files_to_create = {
     # ====== CI/CD (full workflow) ======
@@ -48,6 +41,7 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       orchestrator: ${{ steps.filter.outputs.orchestrator }}
       litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
+      shared: ${{ steps.filter.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -66,17 +60,19 @@ jobs:
             litellm-gateway:
               - 'services/litellm-gateway/**'
               - 'services/shared/**'
+            shared:
+              - 'services/shared/**'
 
   # -----------------------------------------------
-  # 3. Test & build only changed services
+  # 3. Test services that changed, or all services when shared code changes
   # -----------------------------------------------
-  test-and-build:
+  test:
     needs: [lint, detect-changes]
     runs-on: ubuntu-latest
     strategy:
       matrix:
         service: [chainlit-ui, api, orchestrator, litellm-gateway]
-    if: ${{ needs.detect-changes.outputs[matrix.service] == 'true' }}
+    if: ${{ needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -88,19 +84,58 @@ jobs:
         run: |
           cd services/${{ matrix.service }}
           uv run pytest tests/
-      - name: Build and push Docker image (main only)
-        if: github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v6
+
+  # -----------------------------------------------
+  # 4. Build Docker image artifact (main only)
+  # -----------------------------------------------
+  build:
+    needs: [lint, detect-changes, test]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true') }}
+    strategy:
+      matrix:
+        service: [chainlit-ui, api, orchestrator, litellm-gateway]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Docker image artifact
+        run: |
+          docker buildx build \
+            --file ./services/${{ matrix.service }}/Dockerfile \
+            --tag ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }} \
+            --tag ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest \
+            --output type=docker,dest=/tmp/${{ matrix.service }}.tar \
+            .
+      - uses: actions/upload-artifact@v4
         with:
-          context: .
-          file: ./services/${{ matrix.service }}/Dockerfile
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }}
-            ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          name: image-${{ matrix.service }}
+          path: /tmp/${{ matrix.service }}.tar
+
+  # -----------------------------------------------
+  # 5. Deploy Docker image to Docker Hub (main only)
+  # -----------------------------------------------
+  deploy:
+    needs: [lint, detect-changes, build]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true') }}
+    strategy:
+      matrix:
+        service: [chainlit-ui, api, orchestrator, litellm-gateway]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+      - name: Load image into Docker
+        run: docker load --input /tmp/${{ matrix.service }}.tar
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest
 """,
     # ====== Root config ======
     "pyproject.toml": """\
@@ -510,22 +545,14 @@ addopts = [
 # --- Create all directories and files ---
 for filepath, content in files_to_create.items():
     path = Path(filepath)
-    existed_before = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    should_overwrite = any(
-        fnmatch.fnmatch(filepath, pattern) for pattern in OVERWRITE_PATTERNS
-    )
-
-    if existed_before and not should_overwrite:
+    if path.exists():
         logging.info(f"Already exists, skipping: {filepath}")
         continue
 
     with open(path, "w", encoding="utf-8") as f:
         f.write(content if content is not None else "")
-    if existed_before and should_overwrite:
-        logging.info(f"Updated: {filepath}")
-    else:
-        logging.info(f"Created: {filepath}")
+    logging.info(f"Created: {filepath}")
 
 logging.info("✅ Repository skeleton created successfully!")
