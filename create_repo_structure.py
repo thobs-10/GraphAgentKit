@@ -10,90 +10,132 @@ files_to_create = {
 name: CI/CD – per-service test, build & push
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 jobs:
-  # -----------------------------------------------
-  # 1. Lint and format the entire repository
-  # -----------------------------------------------
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dependencies
-        run: uv sync --frozen
-      - name: Lint with Ruff
-        run: uv run ruff check .
-      - name: Check formatting with Ruff
-        run: uv run ruff format --check .
+    # -----------------------------------------------
+    # 1. Lint and format the entire repository
+    # -----------------------------------------------
+    lint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: astral-sh/setup-uv@v5
+            - name: Install dependencies
+                run: uv sync --frozen
+            - name: Lint with Ruff
+                run: uv run ruff check .
+            - name: Check formatting with Ruff
+                run: uv run ruff format --check .
 
-  # -----------------------------------------------
-  # 2. Detect which services changed
-  # -----------------------------------------------
-  detect-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      chainlit-ui: ${{ steps.filter.outputs.chainlit-ui }}
-      api: ${{ steps.filter.outputs.api }}
-      orchestrator: ${{ steps.filter.outputs.orchestrator }}
-      litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            chainlit-ui:
-              - 'services/chainlit-ui/**'
-              - 'services/shared/**'
-            api:
-              - 'services/api/**'
-              - 'services/shared/**'
-            orchestrator:
-              - 'services/orchestrator/**'
-              - 'services/shared/**'
-            litellm-gateway:
-              - 'services/litellm-gateway/**'
-              - 'services/shared/**'
+    # -----------------------------------------------
+    # 2. Detect which services changed
+    # -----------------------------------------------
+    detect-changes:
+        runs-on: ubuntu-latest
+        outputs:
+            chainlit-ui: ${{ steps.filter.outputs.chainlit-ui }}
+            api: ${{ steps.filter.outputs.api }}
+            orchestrator: ${{ steps.filter.outputs.orchestrator }}
+            litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
+            shared: ${{ steps.filter.outputs.shared }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dorny/paths-filter@v3
+                id: filter
+                with:
+                    filters: |
+                        chainlit-ui:
+                            - 'services/chainlit-ui/**'
+                            - 'services/shared/**'
+                        api:
+                            - 'services/api/**'
+                            - 'services/shared/**'
+                        orchestrator:
+                            - 'services/orchestrator/**'
+                            - 'services/shared/**'
+                        litellm-gateway:
+                            - 'services/litellm-gateway/**'
+                            - 'services/shared/**'
+                        shared:
+                            - 'services/shared/**'
 
-  # -----------------------------------------------
-  # 3. Test & build only changed services
-  # -----------------------------------------------
-  test-and-build:
-    needs: [lint, detect-changes]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [chainlit-ui, api, orchestrator, litellm-gateway]
-    if: ${{ needs.detect-changes.outputs[matrix.service] == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dependencies for ${{ matrix.service }} (incl. dev)
-        run: |
-          cd services/${{ matrix.service }}
-          uv sync --frozen --dev
-      - name: Run unit tests (parallel, random, with coverage)
-        run: |
-          cd services/${{ matrix.service }}
-          uv run pytest tests/
-      - name: Build and push Docker image (main only)
-        if: github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./services/${{ matrix.service }}/Dockerfile
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }}
-            ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    # -----------------------------------------------
+    # 3. Test services that changed, or all services when shared code changes
+    # -----------------------------------------------
+    test:
+        needs: [lint, detect-changes]
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                service: [chainlit-ui, api, orchestrator, litellm-gateway]
+        if: ${{ needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true' }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: astral-sh/setup-uv@v5
+            - name: Install dependencies for ${{ matrix.service }} (incl. dev)
+                run: |
+                    cd services/${{ matrix.service }}
+                    uv sync --frozen --dev
+            - name: Run unit tests (parallel, random, with coverage)
+                run: |
+                    cd services/${{ matrix.service }}
+                    uv run pytest tests/
+
+    # -----------------------------------------------
+    # 4. Build Docker image artifact (main only)
+    # -----------------------------------------------
+    build:
+        needs: [lint, detect-changes, test]
+        runs-on: ubuntu-latest
+        if: ${{ github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true') }}
+        strategy:
+            matrix:
+                service: [chainlit-ui, api, orchestrator, litellm-gateway]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: docker/setup-buildx-action@v3
+            - name: Build Docker image artifact
+                run: |
+                    docker buildx build \
+                        --file ./services/${{ matrix.service }}/Dockerfile \
+                        --tag ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }} \
+                        --tag ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest \
+                        --output type=docker,dest=/tmp/${{ matrix.service }}.tar \
+                        .
+            - uses: actions/upload-artifact@v4
+                with:
+                    name: image-${{ matrix.service }}
+                    path: /tmp/${{ matrix.service }}.tar
+
+    # -----------------------------------------------
+    # 5. Deploy Docker image to Docker Hub (main only)
+    # -----------------------------------------------
+    deploy:
+        needs: [lint, detect-changes, build]
+        runs-on: ubuntu-latest
+        if: ${{ github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.shared == 'true' || needs.detect-changes.outputs[matrix.service] == 'true') }}
+        strategy:
+            matrix:
+                service: [chainlit-ui, api, orchestrator, litellm-gateway]
+        steps:
+            - uses: actions/download-artifact@v4
+                with:
+                    name: image-${{ matrix.service }}
+                    path: /tmp
+            - name: Load image into Docker
+                run: docker load --input /tmp/${{ matrix.service }}.tar
+            - uses: docker/login-action@v3
+                with:
+                    username: ${{ secrets.DOCKER_USERNAME }}
+                    password: ${{ secrets.DOCKER_PASSWORD }}
+            - name: Push Docker image
+                run: |
+                    docker push ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }}
+                    docker push ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest
 """,
     # ====== Root config ======
     "pyproject.toml": """\

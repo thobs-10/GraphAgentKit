@@ -10,4 +10,24 @@ dependencies = [
     "uvicorn",
     "httpx",
     "langfuse",
+    "agentic-shared",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-mock>=3.14.0",
+    "pytest-xdist>=3.6.1",
+    "pytest-cov>=6.0.0",
+    "pytest-instafail>=0.5.0",
+    "pytest-randomly>=3.16.0",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--randomly-seed=last",
+    "--instafail",
+    "-n", "auto",
+    "--cov=.",
+    "--cov-report=term-missing"
 ]
