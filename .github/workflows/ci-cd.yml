@@ -1,0 +1,63 @@
+# name: CI/CD
+
+# on:
+#     push:
+#         branches: [main]
+#     pull_request:
+#         branches: [main]
+
+# jobs:
+#     detect-changes:
+#         runs-on: ubuntu-latest
+#         outputs:
+#             chainlit-ui: ${{ steps.filter.outputs.chainlit-ui }}
+#           api: ${{ steps.filter.outputs.api }}
+#             orchestrator: ${{ steps.filter.outputs.orchestrator }}
+#           litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
+#         steps:
+#             - uses: actions/checkout@v4
+#             - uses: dorny/paths-filter@v3
+#               id: filter
+#               with:
+#                   filters: |
+#                       chainlit-ui:
+#                         - 'services/chainlit-ui/**'
+#                       api:
+#                         - 'services/api/**'
+#                       orchestrator:
+#                         - 'services/orchestrator/**'
+#                       litellm-gateway:
+#                         - 'services/litellm-gateway/**'
+
+#     test-and-build:
+#         needs: detect-changes
+#         runs-on: ubuntu-latest
+#         strategy:
+#             matrix:
+#               service: [chainlit-ui, api, orchestrator, litellm-gateway]
+#         if: ${{ needs.detect-changes.outputs[matrix.service] == 'true' }}
+#         steps:
+#             - uses: actions/checkout@v4
+#             - uses: astral-sh/setup-uv@v5
+#             - name: Install dependencies for ${{ matrix.service }}
+#               run: |
+#                   cd services/${{ matrix.service }}
+#                   uv sync --frozen
+#             - name: Run unit tests
+#               run: |
+#                   cd services/${{ matrix.service }}
+#                   uv run pytest tests/
+#             - name: Build and push Docker image
+#               if: github.ref == 'refs/heads/main'
+#               uses: docker/build-push-action@v6
+#               with:
+#                   context: ./services/${{ matrix.service }}
+#                   push: true
+#                   tags: |
+#                       yourdockerhub/graphagentkit-${{ matrix.service }}:${{ github.sha }}
+#                       yourdockerhub/graphagentkit-${{ matrix.service }}:latest
+#                   build-args: |
+#                       SERVICE_NAME=${{ matrix.service }}
+#               env:
+#                   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+#                   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
