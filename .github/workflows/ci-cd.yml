@@ -1,67 +1,87 @@
-# name: CI/CD
+# name: CI/CD – per-service test, build & push
 
 # on:
-#     push:
-#         branches: [main]
-#     pull_request:
-#         branches: [main]
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
 
 # jobs:
-#     detect-changes:
-#         runs-on: ubuntu-latest
-#         outputs:
-#             chainlit-ui: ${{ steps.filter.outputs.chainlit-ui }}
-#           api: ${{ steps.filter.outputs.api }}
-#             orchestrator: ${{ steps.filter.outputs.orchestrator }}
-#           litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
-#         steps:
-#             - uses: actions/checkout@v4
-#             - uses: dorny/paths-filter@v3
-#               id: filter
-#               with:
-#                  filters: |
-#                     chainlit-ui:
-#                       - 'services/chainlit-ui/**'
-#                       - 'services/shared/**'
-#                     middleman:
-#                       - 'services/middleman/**'
-#                       - 'services/shared/**'
-#                     orchestrator:
-#                       - 'services/orchestrator/**'
-#                       - 'services/shared/**'
-#                     litellm-proxy:
-#                       - 'services/litellm-proxy/**'
-#                       - 'services/shared/**'
+#   # -----------------------------------------------
+#   # 1. Lint and format the entire repository
+#   # -----------------------------------------------
+#   lint:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: astral-sh/setup-uv@v5
+#       - name: Install dependencies
+#         run: uv sync --frozen
+#       - name: Lint with Ruff
+#         run: uv run ruff check .
+#       - name: Check formatting with Ruff
+#         run: uv run ruff format --check .
 
-#     test-and-build:
-#         needs: detect-changes
-#         runs-on: ubuntu-latest
-#         strategy:
-#             matrix:
-#               service: [chainlit-ui, api, orchestrator, litellm-gateway]
-#         if: ${{ needs.detect-changes.outputs[matrix.service] == 'true' }}
-#         steps:
-#             - uses: actions/checkout@v4
-#             - uses: astral-sh/setup-uv@v5
-#             - name: Install dependencies for ${{ matrix.service }}
-#               run: |
-#                   cd services/${{ matrix.service }}
-#                   uv sync --frozen
-#             - name: Run unit tests
-#               run: |
-#                   cd services/${{ matrix.service }}
-#                   uv run pytest tests/
-#             - name: Build and push Docker image
-#               if: github.ref == 'refs/heads/main'
-#               uses: docker/build-push-action@v6
-#               with:
-#                   context: ./services/${{ matrix.service }}
-#                   push: true
-#                   tags: |
-#                       yourdockerhub/graphagentkit-${{ matrix.service }}:${{ github.sha }}
-#                       yourdockerhub/graphagentkit-${{ matrix.service }}:latest
-#                   build-args: |
-#                       SERVICE_NAME=${{ matrix.service }}
-#               env:
-#                   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-#                   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+#   # -----------------------------------------------
+#   # 2. Detect which services changed
+#   # -----------------------------------------------
+#   detect-changes:
+#     runs-on: ubuntu-latest
+#     outputs:
+#       chainlit-ui: ${{ steps.filter.outputs.chainlit-ui }}
+#       api: ${{ steps.filter.outputs.api }}
+#       orchestrator: ${{ steps.filter.outputs.orchestrator }}
+#       litellm-gateway: ${{ steps.filter.outputs.litellm-gateway }}
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: dorny/paths-filter@v3
+#         id: filter
+#         with:
+#           filters: |
+#             chainlit-ui:
+#               - 'services/chainlit-ui/**'
+#               - 'services/shared/**'
+#             api:
+#               - 'services/api/**'
+#               - 'services/shared/**'
+#             orchestrator:
+#               - 'services/orchestrator/**'
+#               - 'services/shared/**'
+#             litellm-gateway:
+#               - 'services/litellm-gateway/**'
+#               - 'services/shared/**'
+
+#   # -----------------------------------------------
+#   # 3. Test & build only changed services
+#   # -----------------------------------------------
+#   test-and-build:
+#     needs: [lint, detect-changes]
+#     runs-on: ubuntu-latest
+#     strategy:
+#       matrix:
+#         service: [chainlit-ui, api, orchestrator, litellm-gateway]
+#     if: ${{ needs.detect-changes.outputs[matrix.service] == 'true' }}
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: astral-sh/setup-uv@v5
+#       - name: Install dependencies for ${{ matrix.service }} (incl. dev)
+#         run: |
+#           cd services/${{ matrix.service }}
+#           uv sync --frozen --dev
+#       - name: Run unit tests (parallel, random, with coverage)
+#         run: |
+#           cd services/${{ matrix.service }}
+#           uv run pytest tests/
+#       - name: Build and push Docker image (main only)
+#         if: github.ref == 'refs/heads/main'
+#         uses: docker/build-push-action@v6
+#         with:
+#           context: .
+#           file: ./services/${{ matrix.service }}/Dockerfile
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:${{ github.sha }}
+#             ${{ secrets.DOCKER_USERNAME }}/graphagentkit-${{ matrix.service }}:latest
+#         env:
+#           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+#           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
